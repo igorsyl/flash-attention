@@ -638,6 +638,45 @@ def test_flash_attn_output(seqlen_q, seqlen_k, d, dropout_p, causal, mha_type, d
         assert (dk - dk_ref).abs().max().item() <= 2 * (dk_pt - dk_ref).abs().max().item()
         assert (dv - dv_ref).abs().max().item() <= 2 * (dv_pt - dv_ref).abs().max().item()
 
+def test_flash_attn_output_z_loss_coeff():
+    # fixed parameters
+    # seqlen_q, seqlen_k = 113, 203
+    seqlen_q, seqlen_k = 2, 2
+    d = 32
+    dropout_p = 0.1
+    causal = False
+    mha_type = 'mha'
+    dtype = torch.float16
+    # kvpacked = False
+    z_loss_coeff = 1.0
+
+    # taken from test_flash_attn_output
+    if max(seqlen_q, seqlen_k) >= 2048 and torch.cuda.get_device_properties('cuda').total_memory <= 16 * 2**30:
+        pytest.skip()  # Reference implementation OOM
+    device = 'cuda'
+    # set seed
+    torch.random.manual_seed(0)
+    batch_size = 16
+    nheads = 9
+    nheads_k = nheads if mha_type == "mha" else (1 if mha_type == "mqa" else 3)
+    assert nheads % nheads_k == 0
+    q = torch.randn(batch_size, seqlen_q, nheads, d, device=device, dtype=dtype, requires_grad=True)
+
+    # if not kvpacked
+    k = torch.randn(batch_size, seqlen_k, nheads_k, d, device=device, dtype=dtype,
+                    requires_grad=True)
+    v = torch.randn(batch_size, seqlen_k, nheads_k, d, device=device, dtype=dtype,
+                requires_grad=True)
+
+    out, lse, S_dmask = flash_attn_func(
+        q, k, v, dropout_p, return_attn_probs=True, causal=causal
+    )
+    z_loss = torch.mean(lse ** 2) * z_loss_coeff
+    print(f'lse: {lse}')
+    print(f'z_loss: {z_loss} {z_loss.grad_fn}')
+
+# x = torch.rand(3, 3, requires_grad=True, dtype=torch.double)
+    # torch.autograd.gradcheck(lambda q, k, v: flash_attn_varlen_func(), inputs)
 
 @pytest.mark.parametrize('kvpacked', [True, False])
 # @pytest.mark.parametrize('kvpacked', [False])
